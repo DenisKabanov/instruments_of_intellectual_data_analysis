@@ -17,7 +17,7 @@ def match_timestamps(timestamps1: np.ndarray, timestamps2: np.ndarray, cam2_fram
     * timestamps2: массив с временами с камеры 2
     * cam2_frame: с какого элемента рассматривать кадры с камеры 2 (важен при параллельном запуске)\n
     Returns:
-        np.ndarray: массив соответствий кадров с камеры 1 к кадрам камеры 2
+    * np.ndarray: массив соответствий кадров с камеры 1 к кадрам камеры 2
     """
 
     frames_count = timestamps1.shape[0] # число кадров на камере 1
