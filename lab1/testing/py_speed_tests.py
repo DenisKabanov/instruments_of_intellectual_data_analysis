@@ -1,7 +1,7 @@
 import time
 import numpy as np
 from multiprocessing import Pool
-from numba import njit
+from numba import njit, prange
 
 
 cores_number = 2 # число ядер для запуска
@@ -121,6 +121,34 @@ def match_timestamps_iterated_njit_enumerate(timestamps1: np.ndarray, timestamps
     return correspondence
 
 
+@njit # использование компилятора
+def match_timestamps_iterated_v2(timestamps1: np.array, timestamps2: np.array, cores_number: np.int8=1) -> np.array:
+    frames_count = timestamps1.shape[0] # число кадров на камере 1
+    correspondence = np.full(shape=frames_count, fill_value=-1, dtype=np.int32) # создаём массив под номера кадров с типом int32 для уменьшения потребляемой памяти
+    max_frame = timestamps2.shape[0] - 1  # максимальный номер кадра, что может соответствовать кадру с первой камеры (-1 из-за индексации с нуля)
+    for proc_id in prange(cores_number): # разделяем задачу на проессы
+        t1_start = int(proc_id*frames_count/cores_number) # # с какого элемента рассматриваем кадры с первой камеры 
+        t1_end = int((proc_id+1)*frames_count/cores_number) # по какой элемент рассматриваем кадры с первой камеры (без -1, так как slice не включает последний элемент)
+        cam2_frame = int(2*proc_id*frames_count/cores_number) # с какого элемента рассматривать кадры с камеры 2 (важен при параллельном запуске)
+        if 0 > cam2_frame or cam2_frame > max_frame: # защита от дурака с cam2_frame
+            cam2_frame = 0 # зануление начального кадра второй камеры
+        # подбираем кадр на второй камере, с которого будем начинать (эвристически уже передали ожидаемый cam2_frame, нужно его лишь правильно сместить, если он "обогнал" кадры с камеры 1)
+        delta = np.abs(timestamps2[cam2_frame] - timestamps1[t1_start]) # текущая разность времени
+        while np.abs(timestamps2[max(0, cam2_frame-1)] - timestamps1[t1_start]) < delta: # если дельта уменьшается при предыдущем кадре, то переходим на него (условие — строго меньше, так как времена всех кадров уникальны)
+            cam2_frame -= 1 # переходим на предыдущий кадр (без max, так как при нуле мы бы сюда не зашли в цикл)
+            delta = np.abs(timestamps2[cam2_frame] - timestamps1[t1_start]) # обновляем текущее значение delta
+        # после этого цикла мы либо находимся на оптимальном соответствии первого кадра первой камеры с кадром со второй камеры, либо оптимум — далее по времени (но не раньше!)
+        t1_current = t1_start # текущий кадр
+        for _, frame_time in enumerate(timestamps1[t1_start:t1_end]): # идём по кадрам (_ - номер кадра на первой камере, frame_time - время его запечатления)
+            delta = np.abs(timestamps2[cam2_frame] - frame_time) # текущая разность времени
+            while np.abs(timestamps2[min(cam2_frame+1, max_frame)] - frame_time) < delta: # если при переходе на следующий кадр дельта (разница времени) уменьшилась, то обновляем delta и соответствующий кадр на второй камере 
+                cam2_frame += 1 # переходим на следующий кадр
+                delta = np.abs(timestamps2[cam2_frame] - frame_time)  # обновляем delta
+            correspondence[t1_current] = cam2_frame # если дельта перестала уменьшаеться — записываем найденный кадр с учётом сдвига от параллельного выполнения
+            t1_current += 1 # изменяем текущий кадр
+    return correspondence
+
+
 # параллелизация ==============================================================================================================================================
 def match_timestamps_naive_parallel(timestamps1: np.ndarray, timestamps2: np.ndarray, func, cores_number) -> np.ndarray: 
     frames_count = timestamps1.shape[0]
@@ -133,6 +161,34 @@ def match_timestamps_iterated_parallel(timestamps1: np.ndarray, timestamps2: np.
     frames_count = timestamps1.shape[0] # число кадров с первой камеры
     with Pool(cores_number) as p: # запускаем cores_number процессов
         correspondence = np.concatenate(p.starmap(func, [(timestamps1[int(i*frames_count/cores_number):int((i+1)*frames_count/cores_number)], timestamps2, int(2*i*frames_count/cores_number)) for i in np.arange(cores_number)]), dtype=np.int32)
+    return correspondence
+
+
+@njit(parallel=True) # использование компилятора с параллельным запуском
+def match_timestamps_iterated_v2_parallel(timestamps1: np.array, timestamps2: np.array, cores_number: np.int8) -> np.array:
+    frames_count = timestamps1.shape[0] # число кадров на камере 1
+    correspondence = np.full(shape=frames_count, fill_value=-1, dtype=np.int32) # создаём массив под номера кадров с типом int32 для уменьшения потребляемой памяти
+    max_frame = timestamps2.shape[0] - 1  # максимальный номер кадра, что может соответствовать кадру с первой камеры (-1 из-за индексации с нуля)
+    for proc_id in prange(cores_number): # разделяем задачу на проессы
+        t1_start = int(proc_id*frames_count/cores_number) # # с какого элемента рассматриваем кадры с первой камеры 
+        t1_end = int((proc_id+1)*frames_count/cores_number) # по какой элемент рассматриваем кадры с первой камеры (без -1, так как slice не включает последний элемент)
+        cam2_frame = int(2*proc_id*frames_count/cores_number) # с какого элемента рассматривать кадры с камеры 2 (важен при параллельном запуске)
+        if 0 > cam2_frame or cam2_frame > max_frame: # защита от дурака с cam2_frame
+            cam2_frame = 0 # зануление начального кадра второй камеры
+        # подбираем кадр на второй камере, с которого будем начинать (эвристически уже передали ожидаемый cam2_frame, нужно его лишь правильно сместить, если он "обогнал" кадры с камеры 1)
+        delta = np.abs(timestamps2[cam2_frame] - timestamps1[t1_start]) # текущая разность времени
+        while np.abs(timestamps2[max(0, cam2_frame-1)] - timestamps1[t1_start]) < delta: # если дельта уменьшается при предыдущем кадре, то переходим на него (условие — строго меньше, так как времена всех кадров уникальны)
+            cam2_frame -= 1 # переходим на предыдущий кадр (без max, так как при нуле мы бы сюда не зашли в цикл)
+            delta = np.abs(timestamps2[cam2_frame] - timestamps1[t1_start]) # обновляем текущее значение delta
+        # после этого цикла мы либо находимся на оптимальном соответствии первого кадра первой камеры с кадром со второй камеры, либо оптимум — далее по времени (но не раньше!)
+        t1_current = t1_start # текущий кадр
+        for _, frame_time in enumerate(timestamps1[t1_start:t1_end]): # идём по кадрам (_ - номер кадра на первой камере, frame_time - время его запечатления)
+            delta = np.abs(timestamps2[cam2_frame] - frame_time) # текущая разность времени
+            while np.abs(timestamps2[min(cam2_frame+1, max_frame)] - frame_time) < delta: # если при переходе на следующий кадр дельта (разница времени) уменьшилась, то обновляем delta и соответствующий кадр на второй камере 
+                cam2_frame += 1 # переходим на следующий кадр
+                delta = np.abs(timestamps2[cam2_frame] - frame_time)  # обновляем delta
+            correspondence[t1_current] = cam2_frame # если дельта перестала уменьшаеться — записываем найденный кадр с учётом сдвига от параллельного выполнения
+            t1_current += 1 # изменяем текущий кадр
     return correspondence
 
 
@@ -268,6 +324,20 @@ def main():
     if not np.all(answer == true_answer):
         print("Error!")
 
+# iterated v2
+    time_start = time.perf_counter()
+    for run in range(runs):
+        true_answer = match_timestamps_iterated_v2(timestamps1, timestamps2)
+    print(f"iterated v2 average time: {(time.perf_counter() - time_start) / runs}")
+
+
+    time_start = time.perf_counter()
+    for run in range(runs):
+        answer = match_timestamps_iterated_v2_parallel(timestamps1, timestamps2, cores_number)
+    print(f"iterated v2 parallel average time: {(time.perf_counter() - time_start) / runs}")
+
+    if not np.all(answer == true_answer):
+        print("Error!")
 
 if __name__ == '__main__':
     main()
