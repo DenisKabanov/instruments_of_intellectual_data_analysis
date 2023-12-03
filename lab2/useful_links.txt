@@ -1,0 +1,8 @@
+Обратное распространение ошибки (домножение матриц):
+https://habr.com/ru/companies/otus/articles/483466/
+
+Cross-Entropy Loss:
+https://www.mldawn.com/back-propagation-with-cross-entropy-and-softmax/
+
+Softmax and Cross-Entropy производные:
+https://sefiks.com/2017/12/17/a-gentle-introduction-to-cross-entropy-loss-function/
